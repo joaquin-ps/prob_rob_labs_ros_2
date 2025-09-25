@@ -1,0 +1,16 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/run/host/workdir/local_jbp2157/ros2_ws/build/prob_rob_labs/src",
+        "/run/host/workdir/local_jbp2157/ros2_ws/install/prob_rob_labs/lib/python3.10/site-packages",
+        "/run/host/workdir/local_jbp2157/ros2_ws/install/prob_rob_msgs/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/run/host/workdir/local_jbp2157/ros2_ws/build/prob_rob_labs/src",
+        "/run/host/workdir/local_jbp2157/ros2_ws/install/prob_rob_labs/lib/python3.10/site-packages",
+        "/run/host/workdir/local_jbp2157/ros2_ws/install/prob_rob_msgs/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ]
+}

@@ -13,10 +13,20 @@ class OpenDoorMoveRobot(Node):
         self.log = self.get_logger()
         self.timer = self.create_timer(heartbeat_period, self.heartbeat)
 
+        # Command publishers:
         self.torque_pub = self.create_publisher(
             Float64, '/hinged_glass_door/torque', 1)
         self.robot_cmd_pub = self.create_publisher(
             Twist, '/cmd_vel', 1)
+        
+        # Door state:
+        self.feature_mean_sub = self.create_subscription(
+            Float64, '/feature_mean', self.feature_mean_callback, 1)
+        self.feature_mean_threshold = 280.0
+        self.feature_mean = None
+        self.door_state = 'unknown'  # 'open', 'closed', 'unknown'
+
+        # State machine variables:
         self.counter = 0
         self.state = 'init'
         
@@ -26,20 +36,18 @@ class OpenDoorMoveRobot(Node):
         self.log.info("="*40)
         self.log.info(f'Robot velocity set to {self.velocity}')
 
-        self.time_to_open = 3
-        self.time_to_enter = 3
+        self.time_to_open = 2
+        self.time_to_enter = 4
 
     def heartbeat(self): 
         self.log.info('heartbeat')
+        self.log.info('++++ state machine state: ' + self.state)
         if self.state == 'init':    
-            self.counter = 0
             self.state = 'open_door'
         elif self.state == 'open_door':
             self.open_door()
-            if self.counter * heartbeat_period == self.time_to_open:
+            if self.door_state == 'open':
                 self.state = 'move_robot'
-                self.counter = 0
-            self.counter += 1
         elif self.state == 'move_robot':
             self.move_robot()
             if self.counter * heartbeat_period == self.time_to_enter:
@@ -56,6 +64,22 @@ class OpenDoorMoveRobot(Node):
         elif self.state == 'done':
             self.log.info('done')
             self.timer.cancel()   
+            
+    
+    def feature_mean_callback(self, msg):
+        self.feature_mean = msg.data
+        self.check_door_state()
+
+    def check_door_state(self):
+        if self.feature_mean is None:
+            self.door_state = 'unknown'
+        elif self.feature_mean > self.feature_mean_threshold:
+            self.door_state = 'closed'
+        elif self.feature_mean <= self.feature_mean_threshold:
+            self.door_state = 'open'
+        else:
+            self.door_state = 'unknown'
+        # self.log.info(f'door state: {self.door_state}')
 
     def open_door(self):
         torque = Float64()

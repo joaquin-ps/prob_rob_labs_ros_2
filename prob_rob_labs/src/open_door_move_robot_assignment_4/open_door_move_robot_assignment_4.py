@@ -4,7 +4,9 @@ from rclpy.node import Node
 from std_msgs.msg import Float64
 from geometry_msgs.msg import Twist
 
-heartbeat_period = 0.1
+import numpy as np
+
+heartbeat_period = 3
 
 class OpenDoorMoveRobot(Node):
 
@@ -22,9 +24,25 @@ class OpenDoorMoveRobot(Node):
         # Door state:
         self.feature_mean_sub = self.create_subscription(
             Float64, '/feature_mean', self.feature_mean_callback, 1)
-        self.feature_mean_threshold = 280.0
+        self.feature_mean_threshold = 236.5
         self.feature_mean = None
         self.door_state = 'unknown'  # 'open', 'closed', 'unknown'
+
+        # Initial conditions:
+        self.belief = np.array([[0.5], [0.5]])  # P(door_open), P(door_closed)
+        # self.belief_bar = np.zeros((2,1))
+
+        # Measurement Probabilities: 
+        self.P_z_open_given_door_open = 0.8465
+        self.P_z_closed_given_door_open = 0.1535
+        self.P_z_open_given_door_closed = 0.0075
+        self.P_z_closed_given_door_closed = 0.9925
+
+        # Measurement Model: 
+        self.measurement_model = np.array(
+            [[self.P_z_open_given_door_open, self.P_z_open_given_door_closed],
+            [self.P_z_closed_given_door_open, self.P_z_closed_given_door_closed]]
+        )
 
         # State machine variables:
         self.counter = 0
@@ -39,32 +57,52 @@ class OpenDoorMoveRobot(Node):
         self.time_to_open = 2
         self.time_to_enter = 4
 
+        self.move_threshold = 0.99999
+
+    def _innovation(self, measurement):
+        m = measurement
+        unnormalized_posterior = \
+            (self.measurement_model * np.repeat(self.belief, 2, axis=1).T)[m]
+        posterior = unnormalized_posterior / np.sum(unnormalized_posterior)
+        self.belief = posterior.reshape(2,1)
+
+    def _update_action_state_machine(self):
+        if self.belief[0] < self.move_threshold:
+            self.state = "open_door"
+        else:
+            self.state = "move_robot"
+
     def heartbeat(self): 
         self.log.info('heartbeat')
         self.log.info('++++ state machine state: ' + self.state)
+
         if self.state == 'init':    
             self.state = 'open_door'
         elif self.state == 'open_door':
+            self.log.info(f'P(door open) = {self.belief[0,0]}')
             self.open_door()
-            if self.door_state == 'open':
-                self.state = 'move_robot'
+            measurement = 0 if self.door_state == 'open' else 1 
+            self.log.info(f'Measurement = {measurement}')
+            self._innovation(measurement)
+            self.log.info(f'Posterior P(door open) = {self.belief[0,0]}')
+            self._update_action_state_machine()
+            
         elif self.state == 'move_robot':
             self.move_robot()
-            if self.counter * heartbeat_period == self.time_to_enter:
+            if self.counter * heartbeat_period >= self.time_to_enter:
                 self.state = 'close_door'
                 self.counter = 0
                 self.stop_robot()
             self.counter += 1
         elif self.state == 'close_door':
             self.close_door()
-            if self.counter * heartbeat_period == self.time_to_open:
+            if self.counter * heartbeat_period >= self.time_to_open:
                 self.state = 'done'
                 self.counter = 0
             self.counter += 1
         elif self.state == 'done':
             self.log.info('done')
             self.timer.cancel()   
-            
     
     def feature_mean_callback(self, msg):
         self.feature_mean = msg.data

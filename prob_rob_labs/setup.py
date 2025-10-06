@@ -33,6 +33,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'estimate_prob_door_open = estimate_prob_door_open.estimate_prob_door_open:main',
             'lab3_estimate_probabilities = lab3_estimate_probabilities.lab3_estimate_probabilities:main',
             'open_door_move_robot_assignment_4 = open_door_move_robot_assignment_4.open_door_move_robot_assignment_4:main',
             'open_door_move_robot = open_door_move_robot.open_door_move_robot:main',

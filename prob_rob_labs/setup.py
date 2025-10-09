@@ -33,6 +33,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'turtlebot3_ground_truth = turtlebot3_ground_truth.turtlebot3_ground_truth:main',
             'estimate_prob_door_open = estimate_prob_door_open.estimate_prob_door_open:main',
             'lab3_estimate_probabilities = lab3_estimate_probabilities.lab3_estimate_probabilities:main',
             'lab3_open_door_move_robot = lab3_open_door_move_robot.lab3_open_door_move_robot:main',

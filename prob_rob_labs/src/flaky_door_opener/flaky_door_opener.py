@@ -23,11 +23,14 @@ class FlakyDoorOpener(Node):
         if self.torque == 0:
             self.torque = random.choice([1.0, 0.0, 0.0, 0.0, 0.0]) * max_torque
             self.torque_counter = 0
+            self.log.info(f'door open requested using torque {self.torque}')
         elif self.torque_counter < torque_hold:
+            self.log.info(f'holding torque {self.torque}')
             self.torque_counter += 1
         else:
+            self.log.info(f'Reset torque to 0')
             self.torque = 0.0
-        self.log.info(f'door open requested using torque {self.torque}')
+        # self.log.info(f'door open requested using torque {self.torque}')
         self.pub_torque.publish(Float64(data=self.torque))
 
     def spin(self):

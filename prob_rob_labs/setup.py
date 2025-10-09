@@ -35,7 +35,7 @@ setup(
         'console_scripts': [
             'estimate_prob_door_open = estimate_prob_door_open.estimate_prob_door_open:main',
             'lab3_estimate_probabilities = lab3_estimate_probabilities.lab3_estimate_probabilities:main',
-            'open_door_move_robot_assignment_4 = open_door_move_robot_assignment_4.open_door_move_robot_assignment_4:main',
+            'lab3_open_door_move_robot = lab3_open_door_move_robot.lab3_open_door_move_robot:main',
             'open_door_move_robot = open_door_move_robot.open_door_move_robot:main',
             'image_mean_feature_x = image_mean_feature_x.image_mean_feature_x:main',
             'flaky_door_opener = flaky_door_opener.flaky_door_opener:main',

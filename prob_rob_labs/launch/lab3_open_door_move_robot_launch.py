@@ -14,8 +14,8 @@ def generate_launch_description():
                               description='robot forward velocity'),
         Node(
             package='prob_rob_labs',
-            executable='open_door_move_robot_assignment_4',
-            name='open_door_move_robot_assignment_4',
+            executable='lab3_open_door_move_robot',
+            name='lab3_open_door_move_robot',
             parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}, 
                         {'velocity': LaunchConfiguration('velocity')}]
         )

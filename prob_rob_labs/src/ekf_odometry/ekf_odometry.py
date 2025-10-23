@@ -86,7 +86,7 @@ class EkfOdometry(Node):
         self.predicted_state = np.zeros((self.state_len, 1))
         self.predicted_state_cov = np.identity(self.state_len) * default_var
 
-        # Parameters: 
+        # Parameters 
         self.delta_t = heartbeat_period
 
         self.r_w = 0.033  # m - Wheel radius
@@ -101,7 +101,21 @@ class EkfOdometry(Node):
         self.a_v = 0.1 ** (self.delta_t/self.tau_v) # Forgetting factor - linear
         self.a_w = 0.1 ** (self.delta_t/self.tau_w) # Forgetting factor - angular
 
+        # Populate Covariance
+        sigma_uv = 0.01
+        sigma_uw = 0.01
+
+        self.input_cov[0,0] = sigma_uv
+        self.input_cov[1,1] = sigma_uw
+
+        sigma_wr = 0.01
+        sigma_wl = 0.01
+
+        self.measurement_cov[0,0] = sigma_wr
+        self.measurement_cov[1,1] = sigma_wl
+
     def get_input(self):
+        # Input
         u = np.zeros((self.input_len, 1))
 
         u_v, u_w  = self.latest_cmd_vel
@@ -109,9 +123,13 @@ class EkfOdometry(Node):
         u[0, 0] = u_v
         u[1, 0] = u_w
 
-        return copy(u)
+        # Covariance
+        u_cov = self.input_cov
+
+        return u, u_cov
         
     def get_measurement(self):
+        # Measurement
         z = np.zeros((self.measurement_len, 1))
 
         omega_r = self.latest_data['joint_states']['omega_r']
@@ -123,7 +141,13 @@ class EkfOdometry(Node):
         z[1, 0] = 0.0 if omega_l is None else omega_l
         z[2, 0] = omega_g
 
-        return copy(z)
+        # Covariance
+        z_cov = copy(self.measurement_cov)
+
+        sigma_w_g = self.latest_data["imu"]["angular_velocity_covariance"]
+        z_cov[2,2] = 0.0 if sigma_w_g is None else sigma_w_g[2*2] 
+        
+        return z, z_cov
 
     def G_x_matrix(self):
         delta_t = self.delta_t
@@ -210,7 +234,8 @@ class EkfOdometry(Node):
 
     def advance_filter(self):
         # Get state
-        self.input, self.measurement = self.get_input(), self.get_measurement()
+        self.input, self.input_cov = self.get_input()
+        self.measurement, self.measurement_cov = self.get_measurement()
         self.get_logger().info(f"Prior: {self.state}")
         
         # Step prediction model

@@ -12,9 +12,9 @@ from nav_msgs.msg import Odometry
 
 import numpy as np
 
-heartbeat_period = 0.05
+from rclpy.time import Time
 
-default_var = 0.25
+default_var = 0.005
 
 class EkfOdometry(Node):
 
@@ -44,9 +44,6 @@ class EkfOdometry(Node):
         # Odometry publisher
         self.ekf_odom_publisher = self.create_publisher(Odometry, '/ekf_odom', 10)
 
-        # Timer for heartbeat
-        self.timer = self.create_timer(heartbeat_period, self.heartbeat)
-
         # Data storage
         self.latest_data = {
             'imu': {
@@ -64,6 +61,7 @@ class EkfOdometry(Node):
             }
         }
         self.latest_cmd_vel = (0.0, 0.0)
+        self.prev_time = None
 
         # ==============================================
         # EKF Variables
@@ -87,8 +85,6 @@ class EkfOdometry(Node):
         self.predicted_state_cov = np.identity(self.state_len) * default_var
 
         # Parameters 
-        self.delta_t = heartbeat_period
-
         self.r_w = 0.033  # m - Wheel radius
         self.R = 0.1435/2 # m - 1/2 Wheel separation
         
@@ -97,9 +93,6 @@ class EkfOdometry(Node):
 
         self.tau_v = 0.49 # Time constant - linear
         self.tau_w = 0.65 # Time constant - angular
-
-        self.a_v = 0.1 ** (self.delta_t/self.tau_v) # Forgetting factor - linear
-        self.a_w = 0.1 ** (self.delta_t/self.tau_w) # Forgetting factor - angular
 
         # Populate Covariance
         sigma_uv = 0.01
@@ -113,6 +106,135 @@ class EkfOdometry(Node):
 
         self.measurement_cov[0,0] = sigma_wr
         self.measurement_cov[1,1] = sigma_wl
+
+    def data_callback(self, imu_msg, joint_state_msg):
+        # IMU data
+        self.latest_data['imu']['timestamp'] = imu_msg.header.stamp
+        self.latest_data['imu']['orientation'] = (imu_msg.orientation.x, imu_msg.orientation.y, imu_msg.orientation.z, imu_msg.orientation.w)
+        self.latest_data['imu']['angular_velocity'] = (imu_msg.angular_velocity.x, imu_msg.angular_velocity.y, imu_msg.angular_velocity.z)
+        self.latest_data['imu']['linear_acceleration'] = (imu_msg.linear_acceleration.x, imu_msg.linear_acceleration.y, imu_msg.linear_acceleration.z)
+        self.latest_data['imu']['orientation_covariance'] = imu_msg.orientation_covariance
+        self.latest_data['imu']['angular_velocity_covariance'] = imu_msg.angular_velocity_covariance
+        self.latest_data['imu']['linear_acceleration_covariance'] = imu_msg.linear_acceleration_covariance
+        
+        # Wheel velocity
+        if len(joint_state_msg.velocity) >= 2:
+            self.latest_data['joint_states']['omega_r'] = joint_state_msg.velocity[1] 
+            self.latest_data['joint_states']['omega_l'] = joint_state_msg.velocity[0]  
+
+        self.get_logger().info("*" * 80)
+        self.get_logger().info(f"{self.latest_data}")
+        
+        lin, ang = self.latest_cmd_vel
+        self.get_logger().info("*" * 80)
+        self.get_logger().info(f"Linear vel: {lin}, Angular vel: {ang}")
+
+        self.get_logger().info("*" * 80)
+
+        time_msg = self.latest_data['imu']['timestamp']
+
+        if self.prev_time is not None:
+            self.current_time = self.calculate_time_seconds(time_msg)
+            delta_t = self.current_time - self.prev_time # in seconds
+
+            # Filter
+            self.advance_filter(delta_t)
+
+            # Publish
+            self.publish_odometry()
+
+            # Save previous time
+            self.prev_time = self.current_time
+        else:
+            self.prev_time = self.calculate_time_seconds(time_msg)
+
+    def publish_odometry(self):
+        # Publish EKF odometry
+        odom_msg = Odometry()
+        odom_msg.header.stamp = self.get_clock().now().to_msg()
+        odom_msg.header.frame_id = "odom"
+        odom_msg.child_frame_id = "base_footprint"
+
+        # Populate message (pose)
+        theta = float(self.state[0])
+        odom_msg.pose.pose.position.x = float(self.state[1])
+        odom_msg.pose.pose.position.y = float(self.state[2])
+
+        qx, qy, qz, qw = self.yaw_to_quat(theta)
+        odom_msg.pose.pose.orientation.x = qx
+        odom_msg.pose.pose.orientation.y = qy
+        odom_msg.pose.pose.orientation.z = qz
+        odom_msg.pose.pose.orientation.w = qw
+
+        pose_cov = self.get_pose_cov()
+        odom_msg.pose.covariance = list(pose_cov.reshape((-1, )))
+
+        # Populate message (twist)
+        odom_msg.twist.twist.linear.x = float(self.state[3])
+        odom_msg.twist.twist.angular.z = float(self.state[4])
+
+        twist_cov = self.get_twist_cov()
+        odom_msg.twist.covariance = list(twist_cov.reshape((-1, )))
+
+        # Publish
+        self.ekf_odom_publisher.publish(odom_msg)
+        self.get_logger().info("Published /ekf_odom message")
+    
+    def get_pose_cov(self):
+        pose_cov = np.zeros((6, 6))
+
+        # 6DOF | x     y  z   theta_x     theta_y         theta_z
+        # 5DOF | theta x  y   x_dot       theta_z_dot
+
+        p_x_idx = 0 
+        p_y_idx = 1
+        p_theta_z_idx = 5  
+
+        x_idx = 1
+        y_idx = 2
+        theta_z_idx = 0
+
+        # Covariance
+        pose_cov[p_x_idx, p_x_idx] = self.state_cov[x_idx, x_idx]
+        pose_cov[p_y_idx, p_y_idx] = self.state_cov[y_idx, y_idx]
+        pose_cov[p_theta_z_idx, p_theta_z_idx] = self.state_cov[theta_z_idx, theta_z_idx]
+
+        # Cross Covariance
+        pose_cov[p_x_idx, p_y_idx] = self.state_cov[x_idx, y_idx]        
+        pose_cov[p_y_idx, p_x_idx] = self.state_cov[y_idx, x_idx]
+
+        pose_cov[p_y_idx, p_theta_z_idx] = self.state_cov[y_idx, theta_z_idx]
+        pose_cov[p_theta_z_idx, p_y_idx] = self.state_cov[theta_z_idx, y_idx]
+
+        pose_cov[p_x_idx, p_theta_z_idx] = self.state_cov[x_idx, theta_z_idx]
+        pose_cov[p_theta_z_idx, p_x_idx] = self.state_cov[theta_z_idx, x_idx]
+
+        return pose_cov
+
+    def get_twist_cov(self):
+        twist_cov = np.zeros((6, 6))
+
+        # 6DOF | x_dot    y_dot   z_dot   theta_x_dot     theta_y_dot     theta_z_dot
+        # 5DOF | theta    x       y       x_dot           theta_z_dot
+
+        p_x_dot_idx = 0
+        p_theta_z_dot_idx = 5
+
+        x_dot_idx = 3
+        theta_z_dot_idx = 4
+
+        # Covariance
+        twist_cov[p_x_dot_idx,p_x_dot_idx] = self.state_cov[x_dot_idx,x_dot_idx]
+        twist_cov[p_theta_z_dot_idx,p_theta_z_dot_idx] = self.state_cov[theta_z_dot_idx,theta_z_dot_idx]
+
+        # Cross Covariance
+        twist_cov[p_x_dot_idx , p_theta_z_dot_idx] = self.state_cov[x_dot_idx, theta_z_dot_idx]
+        twist_cov[p_theta_z_dot_idx , p_x_dot_idx] = self.state_cov[theta_z_dot_idx, x_dot_idx]
+
+        return twist_cov
+
+    def cmd_vel_callback(self, msg):
+        self.latest_cmd_vel = (msg.linear.x, msg.angular.z)
 
     def get_input(self):
         # Input
@@ -149,11 +271,16 @@ class EkfOdometry(Node):
         
         return z, z_cov
 
-    def G_x_matrix(self):
-        delta_t = self.delta_t
+    def get_a(self, delta_t):
+        a_v = 0.1 ** (delta_t/self.tau_v) # Forgetting factor - linear
+        a_w = 0.1 ** (delta_t/self.tau_w) # Forgetting factor - angular
 
+        return a_v, a_w
+
+    def G_x_matrix(self, delta_t):
         theta = self.state[0, 0]
         v = self.state[3, 0]
+        a_v, a_w = self.get_a(delta_t)
 
         G_x = np.identity(self.state_len)
 
@@ -169,22 +296,25 @@ class EkfOdometry(Node):
         G_x[2, 3] =  delta_t * np.sin(theta)
 
         # v and ω dynamics (first-order with forgetting factors)
-        G_x[3, 3] = self.a_v
-        G_x[4, 4] = self.a_w
+        G_x[3, 3] = a_v
+        G_x[4, 4] = a_w
 
+        self.get_logger().info(f"Gx: {G_x}")
+        
         return G_x
 
-    def G_u_matrix(self):
-        delta_t = self.delta_t
+    def G_u_matrix(self, delta_t):
+        a_v, a_w = self.get_a(delta_t)
 
         G_u = np.zeros((self.state_len, 2))
 
-        G_u[3, 0] = self.G_v * (1.0 - self.a_v)
-        G_u[4, 1] = self.G_w * (1.0 - self.a_w)
+        G_u[3, 0] = self.G_v * (1.0 - a_v)
+        G_u[4, 1] = self.G_w * (1.0 - a_w)
+
+        self.get_logger().info(f"Gu: {G_u}")
         return G_u
 
     def H_matrix(self):
-        delta_t = self.delta_t
         rw = self.r_w
         R  = self.R
 
@@ -203,23 +333,36 @@ class EkfOdometry(Node):
 
         return H
     
-    def _prediction_model(self):
-        x = self.state
-        u = self.input
+    def _prediction_model(self, delta_t):
+        theta, x, y, v, w = self.state
+        u_v, u_w = self.input
+
+        a_v, a_w = self.get_a(delta_t)
 
         sigma_x = self.state_cov
         sigma_u = self.input_cov
 
-        self.predicted_state = self.G_x_matrix() @ \
-            x + self.G_u_matrix() @ u 
+        # Dynamics model: 
+        v_next = a_v * v + self.G_v * (1.0 - a_v) * u_v
+        w_next = a_w * w + self.G_w * (1.0 - a_w) * u_w
 
+        theta_next = theta + delta_t * w_next
+        x_next     = x     + delta_t * v_next * np.cos(theta)
+        y_next     = y     + delta_t * v_next * np.sin(theta)
+
+        self.predicted_state = np.array([theta_next, x_next, y_next, v_next, w_next]).reshape((-1, 1))
+        
+        self.get_logger().info(f"state shape {self.state.shape}")
+        self.get_logger().info(f"pred_state shape {self.predicted_state.shape}")
+
+        # Propagate covariance
         self.predicted_state_cov = \
-            self.G_x_matrix() @ sigma_x @ \
-            self.G_x_matrix().transpose() + \
-            self.G_u_matrix() @ sigma_u @ \
-            self.G_u_matrix().transpose()
+            self.G_x_matrix(delta_t) @ sigma_x @ \
+            self.G_x_matrix(delta_t).transpose() + \
+            self.G_u_matrix(delta_t) @ sigma_u @ \
+            self.G_u_matrix(delta_t).transpose()
 
-    def _measurement_model(self):
+    def _measurement_model(self, delta_t):
         z = self.measurement
 
         sigma_z = self.measurement_cov
@@ -231,19 +374,27 @@ class EkfOdometry(Node):
             (z - self.H_matrix() @ self.predicted_state)
         self.state_cov = (np.identity(self.state_len) - K @ self.H_matrix()) @ \
             self.predicted_state_cov
+        
+    def skip_prediction(self):
+        self.predicted_state = self.state
+        self.predicted_state_cov = self.state_cov
 
-    def advance_filter(self):
+    def skip_measurement(self):
+        self.state = self.predicted_state
+        self.state_cov = self.predicted_state_cov
+
+    def advance_filter(self, delta_t):
         # Get state
         self.input, self.input_cov = self.get_input()
         self.measurement, self.measurement_cov = self.get_measurement()
-        self.get_logger().info(f"Prior: {self.state}")
-        
+        self.get_logger().info(f"Prior: {self.state}")        
+
         # Step prediction model
-        self._prediction_model()
+        self._prediction_model(delta_t)
         self.get_logger().info(f"Prediction: {self.predicted_state}")
-        
+
         # Step measurement model
-        self._measurement_model()
+        self._measurement_model(delta_t)
         self.get_logger().info(f"Innovation: {self.state}")
 
     def yaw_to_quat(self, yaw):
@@ -254,59 +405,8 @@ class EkfOdometry(Node):
         qw = np.cos(half_yaw)
         return (qx, qy, qz, qw)
 
-    def heartbeat(self):
-        self.log.info('heartbeat')
-        self.get_logger().info("*" * 80)
-        self.get_logger().info(f"{self.latest_data}")
-        
-        lin, ang = self.latest_cmd_vel
-        self.get_logger().info("*" * 80)
-        self.get_logger().info(f"Linear vel: {lin}, Angular vel: {ang}")
-
-        self.get_logger().info("*" * 80)
-        self.advance_filter()
-
-        # Publish EKF odometry
-        odom_msg = Odometry()
-        odom_msg.header.stamp = self.get_clock().now().to_msg()
-        odom_msg.header.frame_id = "odom"
-        odom_msg.child_frame_id = "base_footprint"
-
-        # Populate message:
-        theta = float(self.state[0])
-        odom_msg.pose.pose.position.x = float(self.state[1])
-        odom_msg.pose.pose.position.y = float(self.state[2])
-        odom_msg.twist.twist.linear.x = float(self.state[3])
-        odom_msg.twist.twist.angular.z = float(self.state[4])
-
-        qx, qy, qz, qw = self.yaw_to_quat(theta)
-        odom_msg.pose.pose.orientation.x = qx
-        odom_msg.pose.pose.orientation.y = qy
-        odom_msg.pose.pose.orientation.z = qz
-        odom_msg.pose.pose.orientation.w = qw
-
-        # Publish
-        self.ekf_odom_publisher.publish(odom_msg)
-        self.get_logger().info("Published /ekf_odom message")
-
-    def data_callback(self, imu_msg, joint_state_msg):
-        # IMU data
-        self.latest_data['imu']['timestamp'] = imu_msg.header.stamp
-        self.latest_data['imu']['orientation'] = (imu_msg.orientation.x, imu_msg.orientation.y, imu_msg.orientation.z, imu_msg.orientation.w)
-        self.latest_data['imu']['angular_velocity'] = (imu_msg.angular_velocity.x, imu_msg.angular_velocity.y, imu_msg.angular_velocity.z)
-        self.latest_data['imu']['linear_acceleration'] = (imu_msg.linear_acceleration.x, imu_msg.linear_acceleration.y, imu_msg.linear_acceleration.z)
-        self.latest_data['imu']['orientation_covariance'] = imu_msg.orientation_covariance
-        self.latest_data['imu']['angular_velocity_covariance'] = imu_msg.angular_velocity_covariance
-        self.latest_data['imu']['linear_acceleration_covariance'] = imu_msg.linear_acceleration_covariance
-        
-        # Wheel velocity
-        if len(joint_state_msg.velocity) >= 2:
-            self.latest_data['joint_states']['omega_r'] = joint_state_msg.velocity[1] 
-            self.latest_data['joint_states']['omega_l'] = joint_state_msg.velocity[0]  
-
-    def cmd_vel_callback(self, msg):
-        # Store latest velocity command
-        self.latest_cmd_vel = (msg.linear.x, msg.angular.z)
+    def calculate_time_seconds(self, msg):
+        return Time.from_msg(msg).nanoseconds / 10**9
 
     def spin(self):
         rclpy.spin(self)

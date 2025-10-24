@@ -33,6 +33,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'ekf_odometry_metrics = ekf_odometry_metrics.ekf_odometry_metrics:main',
             'ekf_odometry = ekf_odometry.ekf_odometry:main',
             'turtlebot3_ground_truth = turtlebot3_ground_truth.turtlebot3_ground_truth:main',
             'estimate_prob_door_open = estimate_prob_door_open.estimate_prob_door_open:main',

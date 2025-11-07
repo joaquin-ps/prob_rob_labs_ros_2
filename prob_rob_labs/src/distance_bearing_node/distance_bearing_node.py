@@ -55,12 +55,12 @@ class EstimateObjectProperties(Node):
 
         # Result publishers: 
         self.distance_publisher = self.create_publisher(
-            Float64, '/distance', 1
+            Float64, '/est_distance', 1
         )
         self.distance_msg = Float64()
 
         self.bearing_publisher = self.create_publisher(
-            Float64, '/bearing', 1
+            Float64, '/est_bearing', 1
         )
         self.bearing_msg = Float64()
 

@@ -4,6 +4,8 @@ from rclpy.node import Node
 from std_msgs.msg import Float64
 from geometry_msgs.msg import PoseStamped
 
+from std_msgs.msg import Float32MultiArray
+
 import math
 
 import numpy as np 
@@ -35,16 +37,31 @@ class ErrorCharacterizationDistBear(Node):
         self.magenta_landmark_pos = np.array([-11.5,  -5])
         self.cyan_landmark_pos =    np.array([0,      0])
 
+        # Result publishers: 
+        self.gt_distance_publisher = self.create_publisher(
+            Float64, '/gt_distance', 1
+        )
+        self.gt_distance_msg = Float64()
+
+        self.gt_bearing_publisher = self.create_publisher(
+            Float64, '/gt_bearing', 1
+        )
+        self.gt_bearing_msg = Float64()
+
         ### Estimated Values ###
         self.est_distance = None
         self.est_bearing = None
 
         self.distance_sub = self.create_subscription(
-            Float64, '/distance', self.estimated_distance_callback, 1
+            Float64, '/est_distance', self.estimated_distance_callback, 1
         )
         self.bearing_sub = self.create_subscription(
-            Float64, '/bearing', self.estimated_bearing_callback, 1
+            Float64, '/est_bearing', self.estimated_bearing_callback, 1
         )
+
+        ## Results Publishers ###
+        self.error_array_msg = Float32MultiArray()
+        self.error_pub = self.create_publisher(Float32MultiArray, '/distance_bearing_errors', 10)
         
         self.log = self.get_logger()
         self.timer = self.create_timer(heartbeat_period, self.heartbeat)
@@ -82,17 +99,26 @@ class ErrorCharacterizationDistBear(Node):
     def estimated_bearing_callback(self, msg):
         self.est_bearing = msg.data
 
-    def calculate_error(self):
-        bearing_error  = self.gt_bearing - self.est_bearing
+    def calculate_distance_bearing_error(self):
         distance_error = self.gt_distance - self.est_distance
+        bearing_error  = self.gt_bearing - self.est_bearing
 
-        return bearing_error, distance_error
+        return distance_error, bearing_error
+    
+    def publish_gt_distance_bearing(self, bearing, distance):
+        self.gt_bearing_msg.data = bearing
+        self.gt_distance_msg.data = distance
+
+        self.gt_bearing_publisher.publish(self.gt_bearing_msg)
+        self.gt_distance_publisher.publish(self.gt_distance_msg)
 
     def heartbeat(self):
         values = [self.tb3_gt_x, self.tb3_gt_y, self.tb3_gt_quat, self.est_distance, self.est_bearing]
         self.log.info('*'*50)
 
         if all(value is not None for value in values): 
+            
+            # Ground truth:
             self.gt_distance = self.get_gt_distance()
             self.gt_bearing = self.get_gt_bearing()
 
@@ -100,12 +126,18 @@ class ErrorCharacterizationDistBear(Node):
             self.get_logger().info(f'Ground Truth Bearing:  {self.gt_bearing}')
             self.get_logger().info(f'Estimated Distance:    {self.est_distance}')
             self.get_logger().info(f'Estimated Bearing:     {self.est_bearing}')
+    
+            self.publish_gt_distance_bearing(bearing=self.gt_bearing, distance=self.gt_distance)
 
-            bearing_error, distance_error = self.calculate_error()
+            # Errors:
+            dist_err, bear_err = self.calculate_distance_bearing_error()
+
+            self.error_array_msg.data = [dist_err, bear_err]
+            self.error_pub.publish(self.error_array_msg)
 
             self.log.info('-'*50)
-            self.get_logger().info(f'Error Distance:        {distance_error}')
-            self.get_logger().info(f'Error Bearing:         {bearing_error}')
+            self.get_logger().info(f'Error Distance:        {dist_err}')
+            self.get_logger().info(f'Error Bearing:         {bear_err}')
 
         self.log.info('*'*50)
         

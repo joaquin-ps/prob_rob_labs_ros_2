@@ -10,6 +10,13 @@ import math
 
 import numpy as np 
 
+# Data collection: 
+import pickle
+from pathlib import Path
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+from std_msgs.msg import Int32
+
 heartbeat_period = 0.1
 
 class ErrorCharacterizationDistBear(Node):
@@ -19,6 +26,7 @@ class ErrorCharacterizationDistBear(Node):
 
         ### Ground Truth Values ###
         self.gt_distance = 0.0
+        self.landmark_radius = 0.1 # Need to account for landmark thickness
         self.gt_bearing = 0.0
 
         # tb3 pose
@@ -36,7 +44,7 @@ class ErrorCharacterizationDistBear(Node):
         self.yellow_landmark_pos =  np.array([-11.5,  5])
         self.magenta_landmark_pos = np.array([-11.5,  -5])
         self.cyan_landmark_pos =    np.array([0,      0])
-
+        
         # Result publishers: 
         self.gt_distance_publisher = self.create_publisher(
             Float64, '/gt_distance', 1
@@ -63,6 +71,25 @@ class ErrorCharacterizationDistBear(Node):
         self.error_array_msg = Float32MultiArray()
         self.error_pub = self.create_publisher(Float32MultiArray, '/distance_bearing_errors', 10)
         
+        ## Data collection ###
+        self.get_logger().info(f"{SCRIPT_DIR}")
+        self.data_log_path = Path(f'{SCRIPT_DIR}/data/error_characterization_log.pkl')
+        self.data_buffer = []   
+        self.saved_data = False
+
+        # topic to control data collection: 0 = start collecting, 1 = save (and clear buffer)
+        self.collecting = False
+        self.create_subscription(Int32, '/toggle_data_collection', self._on_cmd, 1)
+        '''
+        USAGE: In separate terminal: 
+
+        # Start data collection
+        ros2 topic pub -1 /toggle_data_collection std_msgs/msg/Int32 "{data: 0}" 
+        
+        # Stop data collection
+        ros2 topic pub -1 /toggle_data_collection std_msgs/msg/Int32 "{data: 1}"
+        '''
+
         self.log = self.get_logger()
         self.timer = self.create_timer(heartbeat_period, self.heartbeat)
 
@@ -77,7 +104,8 @@ class ErrorCharacterizationDistBear(Node):
         tb3_pos = np.array([self.tb3_gt_x, self.tb3_gt_y])
         landmark_pos = self.cyan_landmark_pos
 
-        return np.linalg.norm(tb3_pos - landmark_pos)
+        gt_distance = np.linalg.norm(tb3_pos - landmark_pos)
+        return gt_distance - self.landmark_radius # Need to account for radius of landmark
 
     def get_gt_bearing(self):
         # Landmark to robot
@@ -114,7 +142,7 @@ class ErrorCharacterizationDistBear(Node):
 
     def heartbeat(self):
         values = [self.tb3_gt_x, self.tb3_gt_y, self.tb3_gt_quat, self.est_distance, self.est_bearing]
-        self.log.info('*'*50)
+        # self.log.info('*'*50)
 
         if all(value is not None for value in values): 
             
@@ -122,10 +150,10 @@ class ErrorCharacterizationDistBear(Node):
             self.gt_distance = self.get_gt_distance()
             self.gt_bearing = self.get_gt_bearing()
 
-            self.get_logger().info(f'Ground Truth Distance: {self.gt_distance}')
-            self.get_logger().info(f'Ground Truth Bearing:  {self.gt_bearing}')
-            self.get_logger().info(f'Estimated Distance:    {self.est_distance}')
-            self.get_logger().info(f'Estimated Bearing:     {self.est_bearing}')
+            # self.get_logger().info(f'Ground Truth Distance: {self.gt_distance}')
+            # self.get_logger().info(f'Ground Truth Bearing:  {self.gt_bearing}')
+            # self.get_logger().info(f'Estimated Distance:    {self.est_distance}')
+            # self.get_logger().info(f'Estimated Bearing:     {self.est_bearing}')
     
             self.publish_gt_distance_bearing(bearing=self.gt_bearing, distance=self.gt_distance)
 
@@ -135,12 +163,54 @@ class ErrorCharacterizationDistBear(Node):
             self.error_array_msg.data = [dist_err, bear_err]
             self.error_pub.publish(self.error_array_msg)
 
-            self.log.info('-'*50)
-            self.get_logger().info(f'Error Distance:        {dist_err}')
-            self.get_logger().info(f'Error Bearing:         {bear_err}')
+            # self.log.info('-'*50)
+            # self.get_logger().info(f'Error Distance:        {dist_err}')
+            # self.get_logger().info(f'Error Bearing:         {bear_err}')
 
-        self.log.info('*'*50)
-        
+            # Data collection: 
+            if self.collecting:
+                now = self.get_clock().now().to_msg()
+                self.data_buffer.append({
+                    "sec": now.sec,
+                    "nanosec": now.nanosec,
+                    "gt_distance": float(self.gt_distance),
+                    "est_distance": float(self.est_distance),
+                    "distance_error": float(dist_err),
+                    "gt_bearing": float(self.gt_bearing),
+                    "est_bearing": float(self.est_bearing),
+                    "bearing_error": float(bear_err),
+                })
+
+        # self.log.info('*'*50)
+    
+    # Data collection:
+
+    def _on_cmd(self, msg: Int32):
+        if msg.data == 0:
+            self.collecting = True
+            self.log.info('*'*50)
+            self.get_logger().info("Started data collection.")
+        elif msg.data == 1:
+            self.log.info('*'*50)
+            self.get_logger().info("Save command received: writing pickle...")
+            self.save_pickle()
+            self.data_buffer = []
+        else:
+            self.get_logger().warn(f"Unknown /toggle_data_collection value: {msg.data} (use 0=start, 1=save)")
+
+    def save_pickle(self):
+        if not self.saved_data:
+            try:
+                self.get_logger().info(f"Data path: {self.data_log_path.parent}")
+                self.data_log_path.parent.mkdir(parents=True, exist_ok=True)
+                with self.data_log_path.open('wb') as file:
+                    pickle.dump(self.data_buffer, file)
+                self.get_logger().info(f"Saved {len(self.data_buffer)} samples to {self.data_log_path}")
+
+                self.saved_data = True
+            except Exception as e:
+                self.get_logger().error(f"Failed to save data: {e}")
+
     def spin(self):
         rclpy.spin(self)
 
@@ -155,9 +225,14 @@ def yaw_from_quat(w, x, y, z):
 def main():
     rclpy.init()
     error_characterization_dist_bear = ErrorCharacterizationDistBear()
-    error_characterization_dist_bear.spin()
-    error_characterization_dist_bear.destroy_node()
-    rclpy.shutdown()
+    try:
+        error_characterization_dist_bear.spin()
+    except KeyboardInterrupt:
+        error_characterization_dist_bear.get_logger().info("Ctrl+C received: saving data before exit...")
+        error_characterization_dist_bear.save_pickle()
+    finally:
+        error_characterization_dist_bear.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

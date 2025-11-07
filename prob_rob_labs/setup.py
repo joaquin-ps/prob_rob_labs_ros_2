@@ -33,6 +33,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'distance_bearing_node = distance_bearing_node.distance_bearing_node:main',
             'estimate_object_properties = estimate_object_properties.estimate_object_properties:main',
             'ekf_odometry_metrics = ekf_odometry_metrics.ekf_odometry_metrics:main',
             'ekf_odometry = ekf_odometry.ekf_odometry:main',

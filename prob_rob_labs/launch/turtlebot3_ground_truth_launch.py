@@ -12,11 +12,16 @@ def generate_launch_description():
                               description='set to true for simulation'),
         DeclareLaunchArgument('reference_frame', default_value='odom',
                               description='set reference frame for ground truth publishers'),
+        DeclareLaunchArgument('link_name', default_value='base_link',
+                              description='set link name for ground truth publishers'),
+        
+        
         Node(
             package='prob_rob_labs',
             executable='turtlebot3_ground_truth',
             name='turtlebot3_ground_truth',
             parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')},
-                        {'reference_frame': LaunchConfiguration('reference_frame')}]
+                        {'reference_frame': LaunchConfiguration('reference_frame')},
+                        {'link_name': LaunchConfiguration('link_name')}]
         )
     ])

@@ -30,7 +30,10 @@ class Turtlebot3GroundTruth(Node):
         self.reference_frame = self.get_parameter('reference_frame').get_parameter_value().string_value
         self.log.info(f"Reference frame set to {self.reference_frame}")
         
-        self.link_name = 'waffle_pi::base_link'
+        self.declare_parameter('link_name', 'base_link')
+        link_name = self.get_parameter('link_name').get_parameter_value().string_value
+        
+        self.link_name = f'waffle_pi::{link_name}'
         self.log.info(f"Publishing pose and twist for {self.link_name}")
 
         # Publisher

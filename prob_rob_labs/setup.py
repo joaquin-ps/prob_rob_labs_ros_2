@@ -33,6 +33,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'error_characterization_dist_bear = error_characterization_dist_bear.error_characterization_dist_bear:main',
             'distance_bearing_node = distance_bearing_node.distance_bearing_node:main',
             'estimate_object_properties = estimate_object_properties.estimate_object_properties:main',
             'ekf_odometry_metrics = ekf_odometry_metrics.ekf_odometry_metrics:main',
